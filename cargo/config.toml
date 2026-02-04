@@ -1,0 +1,11 @@
+[target.wasm32-unknown-unknown]
+rustflags = [
+    # 1. Force MVP (Minimum Viable Product) features only
+    "-C", "target-feature=+bulk-memory",   # Keep this (Chromium 79 supports it)
+    "-C", "target-feature=+mutable-globals",
+    "-C", "target-feature=-reference-types", # CRITICAL: Removes the 2nd table
+    "-C", "target-feature=-simd128",       # Disable SIMD
+    "-C", "target-feature=-multi-value",   # Disable Multi-value returns
+    "-C", "target-feature=-sign-ext",      # Disable Sign-extension
+    "-C", "target-feature=-nontrapping-fptoint", # Disable non-trapping conversion
+]
