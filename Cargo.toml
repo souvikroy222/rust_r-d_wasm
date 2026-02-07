@@ -23,4 +23,6 @@ web-sys = { version = "0.3.61", features = [
   "WebGlProgram",          
   "WebGlBuffer",           
   "WebGlUniformLocation",  
+  "WebGlTexture",
+  "HtmlImageElement"
 ]}

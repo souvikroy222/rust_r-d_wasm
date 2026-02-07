@@ -2,137 +2,139 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::WebGlShader;
-use web_sys::{WebGlRenderingContext, WebGlProgram};
+use web_sys::{HtmlCanvasElement, WebGlRenderingContext};
 
-// Basic State to track animation
-struct AppState {
-    current_x: f32, // Where the box is drawing now
-    target_x: f32,  // Where the box wants to go
-}
+mod item;
+use crate::item::Item;
 
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    console_error_panic_hook::set_once();
+    // 1. SETUP
+    let window = web_sys::window().expect("no global `window` exists");
+    let document = window.document().expect("should have a document on window");
+    let canvas = document.get_element_by_id("my-canvas").expect("no canvas");
+    let canvas: HtmlCanvasElement = canvas.dyn_into::<HtmlCanvasElement>()?;
+    let context = canvas
+        .get_context("webgl")?
+        .unwrap()
+        .dyn_into::<WebGlRenderingContext>()?;
 
-    // 1. Setup Canvas & Context (WebGL 1.0)
-    let window = web_sys::window().unwrap();
-    let document = window.document().unwrap();
-    let canvas = document.get_element_by_id("tv-canvas").unwrap().dyn_into::<web_sys::HtmlCanvasElement>()?;
+    // 2. SHADERS
+    let vert_shader = compile_shader(
+        &context,
+        WebGlRenderingContext::VERTEX_SHADER,
+        Item::get_vertex_shader(),
+    )?;
+    let frag_shader = compile_shader(
+        &context,
+        WebGlRenderingContext::FRAGMENT_SHADER,
+        Item::get_fragment_shader(),
+    )?;
+    let program = link_program(&context, &vert_shader, &frag_shader)?;
+    context.use_program(Some(&program));
 
-    // --- FIX FOR BLURRY EDGES START ---
-    // Get the ratio between physical pixels and CSS pixels (usually 1.0, 1.5, or 2.0 on TVs)
-    let dpr = window.device_pixel_ratio(); 
-    
-    // Get the CSS size (how big the element is on screen)
-    let css_width = canvas.client_width() as f64;
-    let css_height = canvas.client_height() as f64;
+    // 3. SCREEN SIZE
+    let res_loc = context
+        .get_uniform_location(&program, "u_resolution")
+        .expect("u_resolution missing");
+    context.uniform2f(
+        Some(&res_loc),
+        canvas.width() as f32,
+        canvas.height() as f32,
+    );
 
-    // Set the internal buffer size to match physical pixels
-    let physical_width = (css_width * dpr) as u32;
-    let physical_height = (css_height * dpr) as u32;
+    let mut item1 = Item::new(
+        50.0,
+        50.0,
+        200.0,
+        200.0,
+        "https://media-cache.cinematerial.com/p/500x/uq34tcxi/swades-indian-movie-poster.jpg",
+        false,
+    );
 
-    canvas.set_width(physical_width);
-    canvas.set_height(physical_height);
-    // --- FIX END ---
-    
-    // Explicitly ask for webgl1 for old Chromium compatibility
-    let gl = canvas.get_context("webgl")?.unwrap().dyn_into::<WebGlRenderingContext>()?;
+    // This one will auto-resize! Height is 0.0 initially.
+    let mut item2 = Item::new(
+        260.0,
+        50.0,
+        300.0,
+        100.0,
+        "https://m.media-amazon.com/images/M/MV5BNGI0MDI4NjEtOWU3ZS00ODQyLWFhYTgtNGYxM2ZkM2Q2YjE3XkEyXkFqcGc@._V1_.jpg",
+        true,
+    );
 
-    // 2. Compile Shaders
-    let vert_code = r#"
-        attribute vec2 position;
-        uniform float u_offset_x;
-        void main() {
-            // Simple 2D translation. 
-            // In clip space, screen is -1.0 to 1.0
-            gl_Position = vec4(position.x + u_offset_x, position.y, 0.0, 1.0);
-        }
-    "#;
-    let frag_code = "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }"; // Red color
+    //load their textures immediately
+    item1.load_texture(&context)?;
+    item2.load_texture(&context)?;
 
-    let program = link_program(&gl, vert_code, frag_code)?;
-    gl.use_program(Some(&program));
+    // Store in RefCell
+    let items = Rc::new(RefCell::new(vec![item1, item2]));
 
-    // 3. Define Geometry (A simple square, 2 triangles)
-    // Coords: -0.2 to 0.2 (Size relative to screen)
-    let vertices: [f32; 12] = [
-        -0.2, -0.2,   0.2, -0.2,   -0.2,  0.2, 
-        -0.2,  0.2,   0.2, -0.2,    0.2,  0.2,
-    ];
+    // Enable Attributes (Do this once)
+    let buffer = context.create_buffer().ok_or("Failed buffer")?;
+    context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&buffer));
 
-    let buffer = gl.create_buffer().ok_or("failed to create buffer")?;
-    gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&buffer));
-    
-    // "view" into the WASM memory buffer to pass to JS
-    // Note: Creating a Float32Array view is cheap (no copy)
-    unsafe {
-        let vert_array = js_sys::Float32Array::view(&vertices);
-        gl.buffer_data_with_array_buffer_view(
-            WebGlRenderingContext::ARRAY_BUFFER,
-            &vert_array,
-            WebGlRenderingContext::STATIC_DRAW,
-        );
-    }
+    let stride = 4 * 4;
+    let pos_loc = context.get_attrib_location(&program, "position");
+    context.enable_vertex_attrib_array(pos_loc as u32);
+    context.vertex_attrib_pointer_with_i32(
+        pos_loc as u32,
+        2,
+        WebGlRenderingContext::FLOAT,
+        false,
+        stride,
+        0,
+    );
 
-    // Link "position" attribute
-    let position_attrib = gl.get_attrib_location(&program, "position");
-    gl.vertex_attrib_pointer_with_i32(position_attrib as u32, 2, WebGlRenderingContext::FLOAT, false, 0, 0);
-    gl.enable_vertex_attrib_array(position_attrib as u32);
+    let tex_loc = context.get_attrib_location(&program, "texCoord");
+    context.enable_vertex_attrib_array(tex_loc as u32);
+    context.vertex_attrib_pointer_with_i32(
+        tex_loc as u32,
+        2,
+        WebGlRenderingContext::FLOAT,
+        false,
+        stride,
+        8,
+    );
 
-    // Get Uniform Location
-    let u_offset_loc = gl.get_uniform_location(&program, "u_offset_x").expect("u_offset_x not found");
-
-    // 4. State Management
-    let state = Rc::new(RefCell::new(AppState {
-        current_x: 0.0,
-        target_x: 0.0,
-    }));
-
-    // 5. Input Handler
-    let state_input = state.clone();
-    let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-        let mut s = state_input.borrow_mut();
-        // Move by 0.5 units in Clip Space (-1 to 1)
-        match event.key_code() {
-            39 => s.target_x += 0.5, // Right
-            37 => s.target_x -= 0.5, // Left
-            _ => {}
-        }
-    }) as Box<dyn FnMut(_)>);
-    window.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())?;
-    closure.forget();
-
-    // 6. Render Loop (The Heart of Performance)
-    // We use a recursive requestAnimationFrame loop
-    let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    // --- 6. THE GAME LOOP 🎮 ---
+    // We wrap everything in a Closure that calls itself
+    let f = Rc::new(RefCell::new(None));
     let g = f.clone();
 
-    let state_render = state.clone();
-    let gl_render = gl.clone();
-    
+    let context = Rc::new(context); // Share context with loop
+
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-        let mut s = state_render.borrow_mut();
+        // --- DRAW FRAME ---
+        context.clear_color(0.1, 0.1, 0.1, 1.0);
+        context.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
 
-        // LERP: Smooth animation logic
-        // Move 10% of the distance per frame. 
-        // This creates a nice "slide" effect that slows down as it arrives.
-        let diff = s.target_x - s.current_x;
-        
-        // Only draw if we are moving (Energy Efficiency)
-        if diff.abs() > 0.001 {
-            s.current_x += diff * 0.1;
+        let mut items_borrow = items.borrow_mut();
 
-            gl_render.clear_color(0.0, 0.0, 0.0, 1.0); // Black background
-            gl_render.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
+        for item in items_borrow.iter_mut() {
+            //the item checks if it needs to resize itself
+            item.update();
 
-            gl_render.uniform1f(Some(&u_offset_loc), s.current_x);
+            //draw logic
+            if let Some(texture) = &item.texture {
+                // Update Buffer with shape
+                let vertices = item.create_rect();
+                unsafe {
+                    let vert_view = js_sys::Float32Array::view(&vertices);
+                    context.buffer_data_with_array_buffer_view(
+                        WebGlRenderingContext::ARRAY_BUFFER,
+                        &vert_view,
+                        WebGlRenderingContext::STATIC_DRAW, // Ideally DYNAMIC_DRAW
+                    );
+                }
+                // Bind Texture and Draw
+            context.bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(texture));
+            context.draw_arrays(WebGlRenderingContext::TRIANGLES, 0, 6);
+            }
+
             
-            // Draw 6 vertices (2 triangles)
-            gl_render.draw_arrays(WebGlRenderingContext::TRIANGLES, 0, 6);
         }
 
-        // Request next frame
+        // --- REQUEST NEXT FRAME ---
         request_animation_frame(f.borrow().as_ref().unwrap());
     }) as Box<dyn FnMut()>));
 
@@ -141,45 +143,61 @@ pub fn start() -> Result<(), JsValue> {
     Ok(())
 }
 
+// Helper for the loop
 fn request_animation_frame(f: &Closure<dyn FnMut()>) {
     web_sys::window()
-        .unwrap()
+        .expect("no global `window` exists")
         .request_animation_frame(f.as_ref().unchecked_ref())
         .expect("should register `requestAnimationFrame` OK");
 }
 
-fn link_program(
-    gl: &WebGlRenderingContext,
-    vert_source: &str,
-    frag_source: &str,
-) -> Result<WebGlProgram, String> {
-    let program = gl.create_program().ok_or("Unable to create shader object")?;
-    let vert_shader = compile_shader(&gl, WebGlRenderingContext::VERTEX_SHADER, vert_source)?;
-    let frag_shader = compile_shader(&gl, WebGlRenderingContext::FRAGMENT_SHADER, frag_source)?;
+// ... Keep compile_shader and link_program below ...
+fn compile_shader(
+    context: &WebGlRenderingContext,
+    shader_type: u32,
+    source: &str,
+) -> Result<web_sys::WebGlShader, String> {
+    let shader = context
+        .create_shader(shader_type)
+        .ok_or_else(|| String::from("Unable to create shader object"))?;
+    context.shader_source(&shader, source);
+    context.compile_shader(&shader);
 
-    gl.attach_shader(&program, &vert_shader);
-    gl.attach_shader(&program, &frag_shader);
-    gl.link_program(&program);
-
-    if gl.get_program_parameter(&program, WebGlRenderingContext::LINK_STATUS).as_bool().unwrap_or(false) {
-        Ok(program)
+    if context
+        .get_shader_parameter(&shader, WebGlRenderingContext::COMPILE_STATUS)
+        .as_bool()
+        .unwrap_or(false)
+    {
+        Ok(shader)
     } else {
-        Err(gl.get_program_info_log(&program).unwrap_or_else(|| "Unknown link error".into()))
+        Err(context
+            .get_shader_info_log(&shader)
+            .unwrap_or_else(|| String::from("Unknown error creating shader")))
     }
 }
 
-fn compile_shader(
-    gl: &WebGlRenderingContext,
-    shader_type: u32,
-    source: &str,
-) -> Result<WebGlShader, String> {
-    let shader = gl.create_shader(shader_type).ok_or("Unable to create shader object")?;
-    gl.shader_source(&shader, source);
-    gl.compile_shader(&shader);
+fn link_program(
+    context: &WebGlRenderingContext,
+    vert_shader: &web_sys::WebGlShader,
+    frag_shader: &web_sys::WebGlShader,
+) -> Result<web_sys::WebGlProgram, String> {
+    let program = context
+        .create_program()
+        .ok_or_else(|| String::from("Unable to create shader program"))?;
 
-    if gl.get_shader_parameter(&shader, WebGlRenderingContext::COMPILE_STATUS).as_bool().unwrap_or(false) {
-        Ok(shader)
+    context.attach_shader(&program, vert_shader);
+    context.attach_shader(&program, frag_shader);
+    context.link_program(&program);
+
+    if context
+        .get_program_parameter(&program, WebGlRenderingContext::LINK_STATUS)
+        .as_bool()
+        .unwrap_or(false)
+    {
+        Ok(program)
     } else {
-        Err(gl.get_shader_info_log(&shader).unwrap_or_else(|| "Unknown shader compile error".into()))
+        Err(context
+            .get_program_info_log(&program)
+            .unwrap_or_else(|| String::from("Unknown error creating program object")))
     }
 }

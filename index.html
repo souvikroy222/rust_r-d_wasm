@@ -1,76 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rust WebGL TV App</title>
+    <title>Rust WebGL - Pixel Coordinates</title>
     <style>
-        /* 1. TV Reset: Remove scrollbars and white flashes */
-        body,
-        html {
+        body {
+            background-color: #222;
             margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            /* Critical for TV navigation focus */
-            background-color: #000000;
-        }
-
-        /* 2. Full Screen Canvas */
-        canvas {
-            display: block;
-            width: 100vw;
             height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; /* Hide scrollbars */
         }
 
-        /* 3. On-Screen Debugger (Crucial for TV Dev) */
-        #debug-log {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: #00ff00;
-            /* Bright Green */
-            font-family: monospace;
-            font-size: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px;
-            max-width: 80%;
-            pointer-events: none;
-            /* Let clicks pass through */
-            z-index: 999;
-            display: none;
-            /* Hidden unless there is an error */
+        canvas {
+            /* This makes the canvas look nice (border) */
+            border: 1px solid #666;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+
+            /* KEY TRICK: 
+               We set the internal resolution in the HTML tag (1920x1080).
+               But we use CSS to tell it to "fit" in the window. 
+               This keeps your coordinate system at 1920x1080 regardless of screen size. 
+            */
+            max-width: 100%;
+            max-height: 100%;
+            aspect-ratio: 16/9;
         }
     </style>
 </head>
-
 <body>
-    <canvas id="tv-canvas"></canvas>
 
-    <div id="debug-log"></div>
+    <canvas id="my-canvas" width="1920" height="1080"></canvas>
 
-    <script src="./pkg/tv_app.js"></script>
+    <script type="module">
+        // Import the Rust WASM code
+        import init from './pkg/tv_app.js';
 
-<script>
-    function run() {
-        if (typeof wasm_bindgen === "undefined") {
-            console.error("wasm_bindgen is not loaded");
-            return;
+        async function run() {
+            // Initialize the WASM module
+            await init();
+            console.log("Rust WebGL has started!");
         }
 
-        wasm_bindgen()
-            .then(function () {
-                console.log("WASM Loaded successfully");
-            })
-            .catch(function (e) {
-                console.error("Failed to load WASM:", e);
-            });
-    }
+        run().catch(console.error);
+    </script>
 
-    run();
-</script>
 </body>
-
 </html>
