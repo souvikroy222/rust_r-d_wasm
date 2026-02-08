@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -48,5 +48,61 @@
         run().catch(console.error);
     </script>
 
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Rust WebGL TV App</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <canvas id="my-canvas" width="1920" height="1080"></canvas>
+    
+    <script type="module">
+        import init, { GameEngine } from './pkg/tv_app.js';
+
+        async function run() {
+            // 1. Initialize Wasm
+            await init();
+
+            // 2. Create the Rust Engine
+            // We pass the canvas ID ("my-canvas") to Rust
+            const game = new GameEngine("my-canvas");
+            
+            console.log("Rust Engine Started! 🦀");
+
+            // 3. The JS Animation Loop
+            function loop() {
+                // Call Rust to draw one frame
+                game.render();
+                
+                // Request next frame
+                requestAnimationFrame(loop);
+            }
+            // Start the loop
+            requestAnimationFrame(loop);
+
+            // 4. The JS Input Bridge ⌨️
+            window.addEventListener('keydown', (e) => {
+                const code = e.keyCode;
+                
+                // Optional: Map TV Remote keys to Standard Keys here
+                // if (code === 13) game.send_key(39); // Enter acts as Right Arrow?
+                
+                console.log(`JS received: ${code} -> Sending to Rust`);
+                
+                // BRIDGE: Pass the integer to Rust
+                game.send_key(code);
+            });
+        }
+
+        run();
+    </script>
 </body>
 </html>
